@@ -27,7 +27,7 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR  := $(dir $(MKFILE_PATH))
 ROOT        := $(MKFILE_DIR)../..
 SNITCH_ROOT := $(shell bender path snitch_cluster)
-
+# SNITCH_ROOT := $(ROOT)/deps/snitch_cluster
 TARGET = occamy_top
 
 CVA6_TXT_TRACE       = $(LOGS_DIR)/trace_hart_00000.txt
@@ -83,8 +83,8 @@ CFG = cfg/lru.hjson
 # Simulator options #
 #####################
 
-VSIM_BENDER += -t cv64a6_imafdc_sv39 -t occamy
-VLT_BENDER  += -t cv64a6_imafdc_sv39 -t occamy
+VSIM_BENDER += -t cv64a6_imafdc_sv39 -t occamy -t snax_gemm
+VLT_BENDER  += -t cv64a6_imafdc_sv39 -t occamy -t snax_gemm
 
 VSIM_FLAGS += -t 1ps
 VSIM_FLAGS += -voptargs=+acc
@@ -214,6 +214,7 @@ MISC_OCCAMYGEN_SV_TEMPLATES += $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 
 MISC_OCCAMYGEN_SV_TARGETS  = $(addprefix $(TARGET_SRC_DIR)/,$(notdir $(basename $(MISC_OCCAMYGEN_SV_TEMPLATES))))
 MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/occamy_cluster_wrapper.sv
+MISC_OCCAMYGEN_SV_TARGETS += $(TARGET_SRC_DIR)/snax_gemm_cluster_wrapper.sv
 
 MISC_OCCAMYGEN_TARGETS  = $(MISC_OCCAMYGEN_SV_TARGETS)
 MISC_OCCAMYGEN_TARGETS += $(TARGET_SRC_DIR)/occamy_memories.json
@@ -237,6 +238,11 @@ $(MISC_OCCAMYGEN_TARGETS): .misc_occamygen_targets_group
 		--cva6-sv          $(SOURCE_OCCAMY_DIR)/occamy_cva6.sv.tpl
 	@$(VERIBLE_FMT) --inplace $(MISC_OCCAMYGEN_SV_TARGETS)
 	@touch $@
+
+.PHONY: gen-wrapper
+gen-wrapper:
+	@echo "[OCCAMYGEN] Generate Wrapper"
+	@$(OCCAMYGEN) --cfg cfg/two-clusters.hjson --outdir src --wrapper
 
 tb: test/testharness.sv
 clean-tb:
@@ -574,9 +580,9 @@ fpga:
 
 clean-work:
 	rm -rf work
-
+BENDER_LOCK = $(ROOT)/Bender.lock
 clean-bender:
-	rm -rf $(BENDER_LOCK) $(ROOT)/.bender/ $(ROOT)/deps
+	rm -rf $(BENDER_LOCK) $(ROOT)/.bender/ $(ROOT)/deps 
 
 clean-logs:
 	rm -rf $(LOGS_DIR)/
@@ -614,3 +620,16 @@ help:
 	@echo -e "Additional useful targets from the included Makefrag:"
 	@echo -e "${Blue}traces         ${Black}Generate the better readable traces in .logs/trace_hart_<hart_id>.txt with spike-dasm."
 	@echo -e "${Blue}annotate       ${Black}Annotate the better readable traces in .logs/trace_hart_<hart_id>.s with the source code related with the retired instructions."
+
+
+# Test function
+.PHONY: test-gen-vsim-src test-vsim-compilation
+
+test-gen-vsim-src:
+	bender script flist ${VSIM_BENDER} | ${SED_SRCS} > test_vsim_srcs.txt
+	bender script vsim $(VSIM_BENDER) --vlog-arg="$(VLOG_FLAGS) -work work-vsim " > work-vsim/compile.vsim.tcl
+	echo '$(VLOG) -work work-vsim $(TB_CC_SOURCES) -vv -ccflags "$(TB_CC_FLAGS)"' >> work-vsim/compile.vsim.tcl
+	echo 'return 0' >> work-vsim/compile.vsim.tcl
+
+test-vsim-compilation: $(VSIM_BUILDDIR)/compile.vsim.tcl
+	$(VSIM) -c -do "source $<; quit" | tee $(dir $<)vlog.log
